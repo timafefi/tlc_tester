@@ -12,13 +12,30 @@ import config
 class BaseAPI:
     def __init__(self, ip, buttcount, min_inte, max_inte, heap_inte):
         self.ip = f'http://{ip}'
-        self.ws = create_connection(f"ws://{ip}:11181")
+        self.sockaddr = f"ws://{ip}:11181"
+        self.ws = create_connection(self.sockaddr)
         self.buttcount = buttcount
         self.session = requests.Session()
         self.min_inte = min_inte
         self.max_inte = max_inte
         self.heap_inte = heap_inte
         self.start_time = time()
+
+    async def connect_loop(self, cls):
+        print(f"{cls} entered connect_loop")
+        self.ws.close()
+        done = False
+        while (not done):
+            try:
+                self.ws = create_connection(self.sockaddr)
+                done = True
+            except Exception as e:
+                logging.info(f"{cls}: ERROR: {e}. Trying again in 3s")
+                await asyncio.sleep(3)
+        print(f"{cls} exited connect_loop")
+
+
+
 
 
 class Website(BaseAPI):
@@ -34,8 +51,6 @@ class Website(BaseAPI):
             self.ws.send("/getcredentials")
             self.ws.recv()
 
-            
-
     async def action(self):
         pages = ['', 'settings', 'wifi']
         while True:
@@ -49,10 +64,8 @@ class Website(BaseAPI):
                 continue
             try:
                 self.socket_requests(path)
-            except BrokenPipeError or ConnectionResetError:
-                logging.info("Websocket closed. reconnecting.")
-                await asyncio.sleep(3)
-                self.ws = create_connection(f"ws://{self.ip}:11181")
+            except Exception:
+                await self.connect_loop("LOAD_PAGE")
             r = random.randint(self.min_inte, self.max_inte)
             if response.status_code != 200:
                 logging.info(f"LOAD_PAGE:    /{path} - ERR. Status code: "
@@ -71,10 +84,8 @@ class Pult(BaseAPI):
             try:
                 self.ws.send(f"/press_start {b}")
                 self.ws.send(f"/press_end {b}")
-            except BrokenPipeError or ConnectionResetError:
-                logging.info("Websocket closed. reconnecting.")
-                await asyncio.sleep(3)
-                self.ws = create_connection(f"ws://{self.ip}:11181")
+            except Exception:
+                await self.connect_loop("PRESS_BUTTON")
             r = random.randint(self.min_inte, self.max_inte)
             logging.info(f"PRESS_BUTTON: {b} OK ({time() - t}). next run in {r}")
             await asyncio.sleep(r)
@@ -86,16 +97,14 @@ class Heap(BaseAPI):
             try:
                 self.ws.send("/free_heap")
                 heap = self.ws.recv().split(';')[1]
-            except BrokenPipeError or ConnectionResetError:
-                logging.info("Websocket closed. reconnecting.")
-                await asyncio.sleep(3)
-                self.ws = create_connection(f"ws://{self.ip}:11181")
+            except Exception as e:
+                logging.info(f"FREE_HEAP: ERROR: {e}")
+                await self.connect_loop("FREE_HEAP")
             t = datetime.now().strftime("%d-%m %H:%M:%S")
-            # t = round(time() - self.start_time, 2)
             with open('freeheap.txt', 'a') as f:
                 f.write(f"{t},{heap}\n")
             logging.info(f"FREE HEAP:    {heap}")
-            await asyncio.sleep(10)
+            await asyncio.sleep(config.heap_interval)
 
 
 def start_test():
@@ -118,4 +127,4 @@ def start_test():
 
 
 if __name__ == '__main__':
-    start_test
+    start_test()
